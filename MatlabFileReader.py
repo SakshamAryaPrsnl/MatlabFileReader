@@ -3,6 +3,7 @@ from tkinter import filedialog, messagebox, ttk
 import scipy.io
 import pandas as pd
 import numpy as np
+import threading
 
 class MatViewerApp:
     def __init__(self, root):
@@ -124,34 +125,56 @@ class MatViewerApp:
             messagebox.showerror("Display Error", str(e))
 
     def on_row_select(self, event):
-        """Safely unpacks data from self.current_df."""
+        """Kicks off a background thread to prevent UI freezing."""
         selected_item = self.tree.selection()
-        if not selected_item:
-            return
-
-        # Check if current_df exists before using it
-        if not hasattr(self, 'current_df'):
+        if not selected_item or not hasattr(self, 'current_df'):
             return
 
         idx = self.tree.index(selected_item[0])
-        
-        # Pull the row from the 'backpack'
         row = self.current_df.iloc[idx]
 
+        # 1. Clear detail box and show a loading message
         self.detail_text.config(state="normal")
         self.detail_text.delete("1.0", tk.END)
-        
-        details = []
-        for col_name, value in row.items():
-            # Only expand to string now, on demand
-            if isinstance(value, np.ndarray):
-                full_val = str(value.tolist())
-            else:
-                full_val = str(value)
-            details.append(f"== {col_name} ==\n{full_val}\n")
-        
-        self.detail_text.insert("1.0", "\n".join(details))
+        self.detail_text.insert("1.0", "⏳ Loading heavy data... Please wait...")
         self.detail_text.config(state="disabled")
+
+        # 2. Start the heavy lifting in a separate thread
+        thread = threading.Thread(target=self.background_load, args=(row,))
+        thread.start()
+
+    def background_load(self, row):
+        """This runs in the background so the UI doesn't crash."""
+        try:
+            details = []
+            for col_name, value in row.items():
+                # For massive arrays, we limit what we show even in the detail box
+                if isinstance(value, np.ndarray):
+                    if value.size > 10000: # If more than 10k elements, truncate
+                        full_val = f"LOG: Array too large to display fully ({value.size} elements).\n"
+                        full_val += str(value.flatten()[:100].tolist()) + " ... [TRUNCATED]"
+                    else:
+                        full_val = str(value.tolist())
+                else:
+                    full_val = str(value)
+                
+                details.append(f"== {col_name} ==\n{full_val}\n")
+
+            final_text = "\n".join(details)
+
+            # 3. Update the UI safely from the main thread
+            self.root.after(0, self.update_detail_ui, final_text)
+            
+        except Exception as e:
+            self.root.after(0, self.update_detail_ui, f"Error loading detail: {e}")
+
+    def update_detail_ui(self, content):
+        """Puts the finished data into the text box."""
+        self.detail_text.config(state="normal")
+        self.detail_text.delete("1.0", tk.END)
+        self.detail_text.insert("1.0", content)
+        self.detail_text.config(state="disabled")
+
     def show_context_menu(self, event):
         """Show right-click menu at the mouse position."""
         iid = self.tree.identify_row(event.y)

@@ -8,6 +8,7 @@ __pycache__/
 *..suo
 *.vsidx
 *.json
+.vs/
 
 # Distribution / packaging
 .Python
